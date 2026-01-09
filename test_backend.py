@@ -50,9 +50,9 @@ castle.add_link(p2.id, project)
 
 # Invariants
 assert_true(p1.id in map1.plot_points, "p1 not in plot_points")
-assert_true(map1.id in p1.links, "Map not linked from PlotTile")
-assert_true(p1.id in map1.links, "PlotTile not linked from PlotMap")
-assert_true(char.id not in p1.links, "CharacterTile link should not be bidirectional")
+assert_true(any(link["target"] == map1.id for link in p1.links), "Map not linked from PlotTile")
+assert_true(any(link["target"] == p1.id for link in map1.links), "PlotTile not linked from PlotMap")
+assert_true(not any(link["target"] == char.id for link in p1.links), "CharacterTile link should not be bidirectional")
 assert_true(p1 in char.resolved_links, "Resolved links should include p1 for char")
 
 print_ok("Plot points and links set correctly")
@@ -79,9 +79,6 @@ print_ok("Baseline orphan detection correct")
 
 
 # ----- Break one important link: map1 → p2 -----
-# map1.plot_points.remove(p2.id)
-# map1.links.remove(p2.id)
-# p2.links.remove(map1.id)
 map1.remove_plot_point(p2)
 
 # Recompute
@@ -105,9 +102,7 @@ assert_true(len(full_names) == 0, "Should be no full orphans yet")
 
 
 # ----- Now break remaining incoming links to p2 -----
-#place.links.remove(p2.id)
 place.remove_link(p2.id)
-#castle.links.remove(p2.id)
 castle.remove_link(p2.id)
 
 incoming = project.find_orphans(check_incoming=True, check_outgoing=False)
@@ -180,7 +175,7 @@ for tile_id, data in graph.items():
     # Correct values
     assert_true(data["name"] == tile.name, f"Name mismatch for {tile.name}")
     assert_true(data["tile_type"] == tile.tile_type, f"Type mismatch for {tile.name}")
-    assert_true(set(data["links"]) == set(tile.links), f"Links mismatch for {tile.name}")
+    assert_true(set([link["target"] for link in data["links"]]) == set([link["target"] for link in tile.links]), f"Links mismatch for {tile.name}")
     assert_true(set(data["tags"]) == set(tile.tags), f"Tags mismatch for {tile.name}")
 
     # PlotMap-specific
@@ -195,10 +190,10 @@ map_entry = graph[map1.id]
 assert_true(set(map_entry["plot_points"]) == {p1.id, p2.id}, "Map plot points incorrect")
 
 p1_entry = graph[p1.id]
-assert_true(map1.id in p1_entry["links"], "p1 should link back to map")
+assert_true(any(link["target"] == map1.id for link in p1_entry["links"]), "p1 should link back to map")
 
 p2_entry = graph[p2.id]
-assert_true(map1.id in p2_entry["links"], "p2 should link back to map")
+assert_true(any(link["target"] == map1.id for link in p2_entry["links"]), "p2 should link back to map")
 
 print_ok("Graph export matches project state")
 
@@ -268,8 +263,8 @@ backup_folder = test_folder.with_name(test_folder.name + ".backup")
 if not backup_folder.exists():
     test_folder.rename(backup_folder)
 
-# # Create new project version
-# project.save(test_folder)  # normal save
+# Create new project version
+project.save(test_folder)  # normal save
 
 # Corrupt last_modified in backup to simulate invalid timestamp
 meta_file = backup_folder / "manifest.json"
@@ -314,7 +309,7 @@ p2_loaded = next(t for t in loaded.tiles.values() if isinstance(t, PlotTile) and
 char_loaded = next(t for t in loaded.tiles.values() if isinstance(t, CharacterTile))
 
 assert_true(p1_loaded.id in map_loaded.plot_points, "Plot point p1 missing after load")
-assert_true(map_loaded.id in p1_loaded.links, "PlotMap link missing in PlotTile after load")
+assert_true(any(link["target"] == map_loaded.id for link in p1_loaded.links), "PlotMap link missing in PlotTile after load")
 assert_true(char_loaded.id in loaded.tiles.keys(), "CharacterTile loaded")
 
 # Tags persisted
