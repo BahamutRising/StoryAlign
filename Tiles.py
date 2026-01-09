@@ -99,34 +99,89 @@ class Tile:
             json.dump(self.toDict(), file, indent=4) # Turn Tile object into dict and write to JSON with indentation for readability
 
     #Add a link from this Tile to another Tile by ID. If project passed in, updates resolved_links
-    def add_link(self, target_id, project):
+    def add_link(self, target_id, project, link_type="references"):
         if target_id not in project.tiles: #Checks if target_id is in the project's registry
             raise ValueError(f"Cannot link to {target_id}: Tile not in project")
-        if target_id not in self.links: #Checks if target_id is already linked
-            self.links.append(target_id)
-            target_tile = project.tiles[target_id]
-            if target_tile not in self.resolved_links:
-                self.resolved_links.append(target_tile) #Adds the new Tile object to resolved_links
+        
+        #Prevent duplicate links of same type
+        for link in self.links:
+            if link["target"] == target_id and link.get("type", "references") == link_type:
+                raise ValueError(f"Link already exists: {link_type} to {project.tiles[target_id].name}")
+            
+        target_tile = project.tiles[target_id]
+            
+        if link_type in {"requires", "causes", "enables", "blocks"}:
+            if not isinstance(self, PlotTile) or not isinstance(target_tile, PlotTile):
+                raise ValueError("Story logic links (requires, causes, enables, blocks) must be between two PlotTiles because they represent story-event ordering.")
+            
+        self.links.append({"target": target_id, "type": link_type})
+        
+        #Updated resolved links
+        if target_tile not in self.resolved_links:
+            self.resolved_links.append(target_tile)
 
-    #Remove a link from this Tile (not bidirectional). Updates resolved_links
-    def remove_link(self, target_id):
-        if target_id in self.links:
-            self.links.remove(target_id)
-            self.resolved_links = [tile for tile in self.resolved_links if tile.id != target_id] #Filters resolved_links to removes Tile with target_id
+        # if target_id not in self.links:
+        #     self.links.append(target_id)
+        #     target_tile = project.tiles[target_id]
+        #     if target_tile not in self.resolved_links:
+        #         self.resolved_links.append(target_tile) #Adds the new Tile object to resolved_links
+
+        #self.resolve_links(project.tiles)
+
+    #Remove a link from this Tile (not bidirectional). Updates resolved_links. If link_type not provided, removes all link instances
+    def remove_link(self, target_id, link_type=None):
+        self.links = [
+            link for link in self.links
+            if not (link["target"] == target_id and (link_type is None or link.get("type") == link_type))
+        ]
+
+        #Only remove resolved tile if no remaining links point to it
+        still_linked = any(link["target"] == target_id for link in self.links)
+        if not still_linked:
+            self.resolved_links = [
+                tile for tile in self.resolved_links
+                if tile.id != target_id
+            ]
+
+        # if target_id in self.links:
+        #     self.links.remove(target_id)
+        #     self.resolved_links = [tile for tile in self.resolved_links if tile.id != target_id] #Filters resolved_links to remove Tile with target_id
 
     #Method to resolve all links to Tile objects
     def resolve_links(self, registry):
         resolved = []
+        seen_ids = set()
 
-        for link_id in self.links:
-            if link_id in registry: #Registry maps IDs to Tile objects
-                tile = registry[link_id] #Get the Tile object from the registry
-                resolved.append(tile)
-            else:
-                print(f"Warning: link ID {link_id} not found in registry")
+        for link in self.links:
+            tile_id = link["target"]
+            if tile_id in registry and tile_id not in seen_ids:
+                resolved.append(registry[tile_id])
+                seen_ids.add(tile_id)
+            elif tile_id not in registry:
+                print(f"Warning: link target {tile_id} not found")
+
+        # for link_id in self.links:
+        #     if link_id in registry: #Registry maps IDs to Tile objects
+        #         tile = registry[link_id] #Get the Tile object from the registry
+        #         resolved.append(tile)
+        #     else:
+        #         print(f"Warning: link ID {link_id} not found in registry")
 
         self.resolved_links = resolved #Stores resolved linked Tile objects
         return resolved
+    
+    #Return all link dicts from Tile (self) to target_id
+    def get_links_to(self, target_id):
+        return [link for link in self.links if link.get("target") == target_id]
+    
+    #Return unique target IDs of this Tile's links
+    def get_link_targets(self):
+        id_set = {link.get("target") for link in self.links}
+        return list(id_set)
+    
+    #Return all link types this Tile has to target
+    def get_link_types(self, target_id):
+        return [link.get("type") for link in self.links if link.get("target") == target_id]
     
     def add_tag(self, tag):
         new_tag = tag.strip().lower() #Remove whitespace and make case insensitive
@@ -175,8 +230,8 @@ class PlotMap(Tile):
             raise ValueError(f"PlotTile {plot_tile.id} is already a plot point in this PlotMap")
 
         #Bidirectional linking
-        self.add_link(plot_tile.id, project) #Links plot_tile to the PlotMap. Also will check if plot_tile exists in project
-        plot_tile.add_link(self.id, project) #Links the PlotMap to plot_tile
+        self.add_link(plot_tile.id, project, "plot point") #Links plot_tile to the PlotMap. Also will check if plot_tile exists in project
+        plot_tile.add_link(self.id, project, "plot point") #Links the PlotMap to plot_tile
         #^Resolved_links for both updated in add_link()
 
         if index is None:
@@ -196,8 +251,8 @@ class PlotMap(Tile):
             raise ValueError(f"PlotTile {plot_tile.id} is not a plot point in this PlotMap")
 
         #Bidirectional unlinking
-        self.remove_link(plot_tile.id) #Unlinks plot_tile from the PlotMap
-        plot_tile.remove_link(self.id) #Unlinks the PlotMap from plot_tile
+        self.remove_link(plot_tile.id, "plot point") #Unlinks plot_tile from the PlotMap
+        plot_tile.remove_link(self.id, "plot point") #Unlinks the PlotMap from plot_tile
 
         index = self.plot_points.index(plot_tile.id)
 
