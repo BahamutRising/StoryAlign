@@ -42,11 +42,23 @@ class Project:
         if tile_id not in self.tiles:
             raise ValueError(f"Tile {tile_id} not found in project")
         
-        #Remove all links to this Tile from all other Tiles in project
+        
         for tile in self.tiles.values():
-            if tile_id in tile.links:
+            if tile.id == tile_id:
+                continue
+
+            #Remove all links to this Tile from all other Tiles in project
+            if any(link["target"] == tile_id for link in tile.links):
+            #if tile_id in tile.links:
                 tile.remove_link(tile_id)
-                print(f"Warning: Removed broken link from Tile {tile.id} to deleted Tile {tile_id}")
+                print(f"Warning: Removed broken link from Tile {tile.id} of all types to deleted Tile {tile_id}")
+
+            #If a plot point for a PlotMap, remove it
+            if isinstance(tile, PlotMap) and tile_id in tile.plot_points:
+                if tile_id in self.tiles:
+                    plot_point = self.tiles.get(tile_id)
+                    tile.remove_plot_point(plot_point)
+                    print(f"Warning: Removed broken plot point from PlotMap {tile.id} to deleted Tile {tile_id}")
 
         #Remove the Tile from the registry
         del self.tiles[tile_id]
@@ -81,8 +93,15 @@ class Project:
             if tile.id in ignore_ids_set:
                 continue #Filter out ignored IDs
 
-            is_incoming_orphan = check_incoming and not any(tile.id in t.links for t in self.tiles.values()) #is an incoming orphan if the Tile is not linked BY anything
+            is_incoming_orphan = check_incoming and not any(
+                any(link["target"] == tile.id for link in t.links)
+                for t in self.tiles.values()
+                if t.id != tile.id
+            ) #is an incoming orphan if the Tile is not linked BY anything
             is_outgoing_orphan = check_outgoing and not tile.links #is an outgoing orphan if the Tile links TO nothing
+
+            # is_incoming_orphan = check_incoming and not any(tile.id in t.links for t in self.tiles.values()) #is an incoming orphan if the Tile is not linked BY anything
+            # is_outgoing_orphan = check_outgoing and not tile.links #is an outgoing orphan if the Tile links TO nothing
 
             conditions = []
             if check_incoming:
@@ -603,9 +622,23 @@ class Project:
 
                 #Links and resolved_links consistency
                 if hasattr(tile, "links"):
-                    for link_id in tile.links:
-                        if link_id not in self.tiles:
-                            errors.append(f"Tile {tile_name} ({tile_id}) links to nonexistent tile {link_id}")
+                    for link in tile.links:
+                        if not isinstance(link, dict):
+                            errors.append(f"Tile {tile_name} ({tile_id}) has malformed link (not dict): {link}")
+
+                        if "target" not in link:
+                            errors.append(f"Tile {tile_name} ({tile_id}) has link missing target: {link}")
+
+                        if "type" not in link:
+                            errors.append(f"Tile {tile_name} ({tile_id}) has link missing type: {link}")
+
+                        if "target" in link and link["target"] not in self.tiles:
+                            errors.append(f"Tile {tile_name} ({tile_id}) links to nonexistent tile {link['target']}")
+
+                # if hasattr(tile, "links"):
+                #     for link_id in tile.links:
+                #         if link_id not in self.tiles:
+                #             errors.append(f"Tile {tile_name} ({tile_id}) links to nonexistent tile {link_id}")
 
                 if hasattr(tile, "resolved_links"):
                     for resolved in tile.resolved_links:
@@ -623,13 +656,16 @@ class Project:
                         if hasattr(resolved, "id"):
                             resolved_ids.add(resolved.id)
 
-                    for link_id in tile.links:
-                        if link_id not in resolved_ids:
-                            errors.append(f"Tile {tile_name} ({tile_id}) has unresolved link {link_id}")
+                    #for link_id in tile.links:
+                    for link in tile.links:
+                        if "target" in link and link["target"] not in resolved_ids:
+                        #if link_id not in resolved_ids:
+                            errors.append(f"Tile {tile_name} ({tile_id}) has unresolved link {link.get('target', 'unknown')}")
 
                 #Check that all resolved_links IDs are in links IDs
                 if hasattr(tile, "links") and hasattr(tile, "resolved_links"):
-                    plot_id_set = set(tile.links)
+                    #plot_id_set = set(tile.links)
+                    plot_id_set = set([link.get("target") for link in tile.links])
 
                     for resolved in tile.resolved_links:
                         resolved_name = "MISSING NAME"
@@ -656,7 +692,8 @@ class Project:
                                     plot_tile_name = plot_tile.name
                                 #Check bidirectional link
                                 if hasattr(plot_tile, "links"):
-                                    if tile.id not in plot_tile.links:
+                                    if not any(link["target"] == tile.id for link in plot_tile.links):
+                                    #if tile.id not in plot_tile.links:
                                         errors.append(f"PlotTile {plot_tile_name} ({plot_tile.id}) not linked back to PlotMap {tile_name} ({tile_id})")
                     #Check resolved plot points
                     if not hasattr(tile, "resolved_plot_points"):
@@ -756,6 +793,51 @@ class Project:
             raise AssertionError("Load check failed:\n" + "\n".join(errors))
         return {"errors": errors, "warnings": warnings} #Report any errors or warnings
     
+    #Checks logical links of plot points for a PlotMap
+    def validate_plotmap(self, plotmap_id):
+        timeline = {}
+
+        for tile in self.tiles.values():
+            if hasattr(tile, "timeline_index") and tile.timeline_index is not None: #If no timeline, skip it
+                timeline[tile.id] = tile.timeline_index
+
+        plotmap = self.tiles.get(plotmap_id)
+        if plotmap is None:
+            raise ValueError(f"PlotMap {plotmap_id} does not exist in project")
+        
+        plot_ids = set(plotmap.plot_points)
+        
+        errors = []
+
+        for plot_tile_id in plotmap.plot_points:
+            plot_tile = self.tiles.get(plot_tile)
+            if plot_tile is None:
+                raise ValueError(f"Plot point {plot_tile_id} does not exist in project")
+            
+            for link in plot_tile.links:
+                target = link["target"]
+                link_type = link["type"]
+
+                if link_type not in ("requires", "causes", "enables", "blocks"):
+                    continue #Only checks logical links
+
+                if target not in timeline or plot_tile_id not in timeline:
+                    continue #Only checks plot points and links with timeline index
+
+                if link_type == "blocks" and target not in plot_ids:
+                    continue #Ignore blocks if target isn't in this PlotMap
+
+                time_plot_point = timeline[plot_tile_id]
+                time_target = timeline[target]
+
+                if link_type == "requires" and not (time_plot_point > time_target):
+                    errors.append(f"{plot_tile.name} requires {self.tiles[target].name}, but {self.tiles[target].name} does not happen before {plot_tile.name}")
+
+                elif link_type in ("causes", "enables", "blocks") and not (time_plot_point < time_target):
+                    errors.append(f"{plot_tile.name} {link_type} {self.tiles[target].name}, but {self.tiles[target].name} does not happen after {plot_tile.name}")
+
+                return errors
+    
     #Prints or exports the project graph. Simple text-based graph visualization. If export, keys are tile IDs, values are info dicts
     def visualize_graph(self, export=False):
         graph = {}
@@ -779,7 +861,7 @@ class Project:
         for tile_id, info in graph.items():
             graph_str += f"\n- {info['name']} ({info['tile_type']}, id={tile_id})"
             if info["links"]:
-                graph_str += f"\n  Links to: {', '.join(info['links'])}"
+                graph_str += f"\n  Links to: {', '.join([link.get('target', 'unknown') for link in info['links']])}"
             if "plot_points" in info:
                 graph_str += f"\n  Plot points: {', '.join(info['plot_points'])}"
             if info["tags"]:
