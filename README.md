@@ -2,6 +2,8 @@ StoryAlign
 A dependency-aware story and timeline modeling tool
 StoryAlign is a desktop application for planning, validating, and visualizing complex narratives. It lets writers, game designers, and world-builders represent characters, settings, and story events as a structured graph instead of disconnected notes.
 Unlike traditional outlining tools, StoryAlign understands relationships, timelines, and logical constraints between events.
+
+The backend files are Tiles.py and Project.py. The frontend file is storyalign_gui.py.
 ________________________________________
 ✨ Core Ideas
 StoryAlign models a story as:
